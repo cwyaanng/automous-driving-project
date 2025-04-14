@@ -1,0 +1,7 @@
+__pycache__/
+checkpoints/
+info/
+logs/
+venv/
+video_frames/
+.github/

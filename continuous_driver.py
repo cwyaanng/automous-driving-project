@@ -15,7 +15,8 @@ from networks.on_policy.ppo.agent import PPOAgent
 from simulation.connection import ClientConnection
 from simulation.environment import CarlaEnvironment
 from parameters import *
-
+import cv2
+import traceback
 
 def parse_args():
     
@@ -42,6 +43,40 @@ def boolean_string(s):
         raise ValueError('Not a valid boolean string')
     return s == 'True'
 
+def make_video_from_frames(folder_path, output_file='output.mp4', fps=20, prefix="third_frame"):
+
+    print(f"[DEBUG] Creating video from folder: {folder_path}, using prefix: {prefix}")
+    images = sorted([img for img in os.listdir(folder_path) if img.startswith(prefix) and img.endswith(".png")])
+
+    if not images:
+        print(f"[WARNING] No {prefix} images found in {folder_path}")
+        return
+
+    # First valid image
+    for img in images:
+        first_image_path = os.path.join(folder_path, img)
+        first_image = cv2.imread(first_image_path)
+        if first_image is not None:
+            break
+    else:
+        print("[ERROR] All images failed to load")
+        return
+
+    height, width, _ = first_image.shape
+    video = cv2.VideoWriter(output_file, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+
+    for img in images:
+        img_path = os.path.join(folder_path, img)
+        frame = cv2.imread(img_path)
+        if frame is None:
+            print(f"[WARNING] Skipping unreadable image: {img}")
+            continue
+        if frame.shape[:2] != (height, width):
+            frame = cv2.resize(frame, (width, height))
+        video.write(frame)
+
+    video.release()
+    print(f"[DEBUG] 🎬 Video saved to {output_file}")
 
 
 def runner():
@@ -49,7 +84,8 @@ def runner():
     #========================================================================
     #                           BASIC PARAMETER & LOGGING SETUP
     #========================================================================
-    
+    print("[DEBUG] Starting runner()")
+
     args = parse_args()
     exp_name = args.exp_name
     train = args.train
@@ -58,6 +94,7 @@ def runner():
     total_timesteps = args.total_timesteps
     action_std_init = args.action_std_init
 
+    print(f"[DEBUG] Parsed args: {args}")
     try:
         if exp_name == 'ppo':
             run_name = "PPO"
@@ -104,15 +141,28 @@ def runner():
     #========================================================================
 
     try:
+        print("[DEBUG] Connecting to CARLA server...")
         client, world = ClientConnection(town).setup()
         logging.info("Connection has been setup successfully.")
-    except:
+    except Exception as e:
+        print(f"[ERROR] Connection to CARLA failed: {e}")
         logging.error("Connection has been refused by the server.")
         ConnectionRefusedError
     if train:
-        env = CarlaEnvironment(client, world,town)
+        env = CarlaEnvironment(client, world, town)
+        env.save_image = True
+        env.image_save_dir = os.path.join("video_frames", town, f"train_episode_{episode:04d}")
+        print(f"[DEBUG] save_image: {env.save_image}")
+        print(f"[DEBUG] Initial image_save_dir: {env.image_save_dir}")
+        os.makedirs(env.image_save_dir, exist_ok=True)
     else:
-        env = CarlaEnvironment(client, world,town, checkpoint_frequency=None)
+        env = CarlaEnvironment(client, world, town, checkpoint_frequency=None)
+        env.save_image = True
+        env.image_save_dir = os.path.join("video_frames", town, f"test_episode_{episode:04d}")
+        print(f"[DEBUG] save_image: {env.save_image}")
+        print(f"[DEBUG] Initial image_save_dir: {env.image_save_dir}")
+        os.makedirs(env.image_save_dir, exist_ok=True)
+
     encode = EncodeState(LATENT_DIM)
 
 
@@ -144,9 +194,16 @@ def runner():
         if train:
             #Training
             while timestep < total_timesteps:
-            
-                observation = env.reset()
-                observation = encode.process(observation)
+               
+                try:
+                    print(f"timestep : {timestep} , total_timestep : {total_timesteps}")
+                    observation = env.reset()
+                    observation = encode.process(observation)
+                    print("[DEBUG] TRAIN Environment reset successful")
+                except Exception as e:
+                    print(f"[ERROR] env.reset() failed: {e}")
+                    traceback.print_exc()
+                    break
 
                 current_ep_reward = 0
                 t1 = datetime.now()
@@ -175,8 +232,15 @@ def runner():
 
                     # break; if the episode is over
                     if done:
-                        episode += 1
-
+                        os.makedirs(env.image_save_dir, exist_ok=True)
+                        # make_video_from_frames(
+                        #     folder_path=os.path.join("video_frames", town, f"train_episode_{episode:04d}"),
+                        #     output_file=os.path.join("video_frames", town, f"train_episode_{episode:04d}.mp4"),
+                        #     prefix="third_frame"
+                        # )
+                        episode += 1           
+                        
+                        env.frame_count = 0
                         t2 = datetime.now()
                         t3 = t2-t1
                         
@@ -238,17 +302,33 @@ def runner():
             sys.exit()
         else:
             #Testing
+            print("[DEBUG] Starting testing loop")
             while timestep < args.test_timesteps:
-                observation = env.reset()
-                observation = encode.process(observation)
-
+                print(f"[DEBUG] Resetting environment at timestep {timestep}")
+                
+                try:
+                    observation = env.reset()
+                    observation = encode.process(observation)
+                    print("[DEBUG] Environment reset successful")
+                except Exception as e:
+                    print(f"[ERROR] env.reset() failed111: {e}")
+                    traceback.print_exc()
+                    break
                 current_ep_reward = 0
                 t1 = datetime.now()
                 for t in range(args.episode_length):
                     # select action with policy
-                    action = agent.get_action(observation, train=False)
-                    observation, reward, done, info = env.step(action)
-                    if observation is None:
+                    print(f"[DEBUG] Step {t} in episode {episode}, timestep {timestep}")
+                    try : 
+                        action = agent.get_action(observation, train=False)
+                        print(f"[DEBUG] Action taken: {action}")
+                        observation, reward, done, info = env.step(action)
+                        if observation is None:
+                            print("[WARNING] Observation is None. Breaking...")
+                            break
+                    except Exception as e:
+                        print(f"[ERROR] env.step() failed: {e}")
+                        traceback.print_exc()
                         break
                     observation = encode.process(observation)
                     
@@ -256,13 +336,32 @@ def runner():
                     current_ep_reward += reward
                     # break; if the episode is over
                     if done:
-                        episode += 1
+                        print(f"[DEBUG] Episode {episode} ended11. Setting up next image_save_dir.")
 
+                        try:
+                            print(f"[DEBUG] Calling make_video_from_frames()")
+                            env.image_save_dir = os.path.join("video_frames", town, f"test_episode_{episode:04d}")
+                            os.makedirs(env.image_save_dir, exist_ok=True)
+                            # make_video_from_frames(
+                            #     folder_path=os.path.join("video_frames", town, f"test_episode_{episode:04d}"),
+                            #     output_file=os.path.join("video_frames", town, f"test_episode_{episode:04d}.mp4"),
+                            #     prefix="third_frame"
+                            # )
+                            print("[DEBUG] Video created successfully.")
+                        except Exception as e:
+                            print(f"[ERROR] make_video_from_frames failed: {e}")
+                            traceback.print_exc()
+
+                        episode += 1
+                        print(f"[DEBUG] New image_save_dir: {env.image_save_dir}")
+                        print(f"[DEBUG] Making video from: video_frames/{town}/train_episode_{episode:04d}")
                         t2 = datetime.now()
                         t3 = t2-t1
                         
                         episodic_length.append(abs(t3.total_seconds()))
                         break
+
+
                 deviation_from_center += info[1]
                 distance_covered += info[0]
                 
@@ -287,15 +386,29 @@ def runner():
 
             print("Terminating the run.")
             sys.exit()
+        os.makedirs(env.image_save_dir, exist_ok=True)
+        env.frame_count = 0  # 매 에피소드마다 프레임 번호 초기화
+    except Exception as e:
+        print("[ERROR] Uncaught Exception in runner():")
+        traceback.print_exc()
+        raise  # <- 이게 중요! 메인으로 전달됨
 
     finally:
-        sys.exit()
+        print("[DEBUG] runner() 함수 종료됨")
+
 
 
 if __name__ == "__main__":
-    try:        
+    try:
+        print("[DEBUG] Starting runner()")
         runner()
     except KeyboardInterrupt:
+        print("[INFO] Caught KeyboardInterrupt, exiting cleanly.")
         sys.exit()
+    except Exception as e:
+        print("[ERROR] Uncaught Exception in __main__:")
+        print(traceback.format_exc())  # 전체 스택 트레이스 출력
+        raise 
     finally:
         print('\nExit')
+

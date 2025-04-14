@@ -5,20 +5,21 @@ import pygame
 from simulation.connection import carla
 from simulation.sensors import CameraSensor, CameraSensorEnv, CollisionSensor
 from simulation.settings import *
-
-
+import os
+import traceback
 class CarlaEnvironment():
 
     def __init__(self, client, world, town, checkpoint_frequency=100, continuous_action=True) -> None:
 
-
+        print("[INIT] CarlaEnvironment initialized.")
         self.client = client
         self.world = world
         self.blueprint_library = self.world.get_blueprint_library()
         self.map = self.world.get_map()
         self.action_space = self.get_discrete_action_space()
         self.continous_action_space = continuous_action
-        self.display_on = VISUAL_DISPLAY
+        self.display_on = False  # 시각화 꺼버림
+
         self.vehicle = None
         self.settings = None
         self.current_waypoint_index = 0
@@ -42,76 +43,98 @@ class CarlaEnvironment():
 
 
 
-    # A reset function for reseting our environment.
     def reset(self):
-
+        print("\n[RESET] Called =================================")
         try:
-            
+            self.frame_count = 0
+            print("[RESET] Calling remove_sensors()")
+            self.remove_sensors()
+            print(f"[RESET] Sensors after removal: {[x.id for x in self.sensor_list]}")
+            print(f"[RESET] Actors after removal: {[x.id for x in self.actor_list]}")
+
             if len(self.actor_list) != 0 or len(self.sensor_list) != 0:
+                print("[RESET] Destroying previous actors/sensors...")
                 self.client.apply_batch([carla.command.DestroyActor(x) for x in self.sensor_list])
                 self.client.apply_batch([carla.command.DestroyActor(x) for x in self.actor_list])
                 self.sensor_list.clear()
                 self.actor_list.clear()
-            self.remove_sensors()
+                print("[RESET] Cleared sensor and actor lists")
 
-
-            # Blueprint of our main vehicle
+            print("[RESET] Getting vehicle blueprint")
             vehicle_bp = self.get_vehicle(CAR_NAME)
 
+            print(f"[RESET] Spawning vehicle in town: {self.town}")
             if self.town == "Town07":
-                transform = self.map.get_spawn_points()[38] #Town7  is 38 
+                transform = self.map.get_spawn_points()[38]
                 self.total_distance = 750
             elif self.town == "Town02":
-                transform = self.map.get_spawn_points()[1] #Town2 is 1
+                transform = self.map.get_spawn_points()[1]
                 self.total_distance = 780
             else:
                 transform = random.choice(self.map.get_spawn_points())
                 self.total_distance = 250
 
+            print(f"[RESET] Trying to spawn vehicle at transform: {transform}")
             self.vehicle = self.world.try_spawn_actor(vehicle_bp, transform)
+            if not self.vehicle:
+                raise RuntimeError("[RESET ERROR] Failed to spawn vehicle.")
+            print(f"[RESET] Spawned vehicle: {self.vehicle.id}")
             self.actor_list.append(self.vehicle)
 
-
             # Camera Sensor
+            print("[RESET] Initializing CameraSensor")
             self.camera_obj = CameraSensor(self.vehicle)
-            while(len(self.camera_obj.front_camera) == 0):
-                time.sleep(0.0001)
-            self.image_obs = self.camera_obj.front_camera.pop(-1)
             self.sensor_list.append(self.camera_obj.sensor)
+            print(f"[RESET] Camera sensor ID: {self.camera_obj.sensor.id}")
+            
+            print("[RESET] Waiting for camera images...")
+            wait_counter = 0
+            while len(self.camera_obj.front_camera) == 0:
+                time.sleep(0.001)
+                wait_counter += 1
+                if wait_counter > 10000:
+                    raise RuntimeError("[RESET ERROR] Camera image not received after waiting.")
+
+            self.image_obs = self.camera_obj.front_camera.pop(-1)
+            print("[RESET] Received initial camera image.")
 
             # Third person view of our vehicle in the Simulated env
-            if self.display_on:
+            if self.display_on == False:
+                print("[RESET] Initializing Env CameraSensor")
                 self.env_camera_obj = CameraSensorEnv(self.vehicle)
                 self.sensor_list.append(self.env_camera_obj.sensor)
+                print(f"[RESET] Env camera sensor ID: {self.env_camera_obj.sensor.id}")
 
             # Collision sensor
+            print("[RESET] Initializing CollisionSensor")
             self.collision_obj = CollisionSensor(self.vehicle)
             self.collision_history = self.collision_obj.collision_data
             self.sensor_list.append(self.collision_obj.sensor)
+            print(f"[RESET] Collision sensor ID: {self.collision_obj.sensor.id}")
 
-            
+            # Initialize other state vars
+            print("[RESET] Initializing environment variables")
             self.timesteps = 0
             self.rotation = self.vehicle.get_transform().rotation.yaw
             self.previous_location = self.vehicle.get_location()
             self.distance_traveled = 0.0
             self.center_lane_deviation = 0.0
-            self.target_speed = 22 #km/h
+            self.target_speed = 22
             self.max_speed = 25.0
             self.min_speed = 15.0
             self.max_distance_from_center = 3
-            self.throttle = float(0.0)
-            self.previous_steer = float(0.0)
-            self.velocity = float(0.0)
-            self.distance_from_center = float(0.0)
-            self.angle = float(0.0)
+            self.throttle = 0.0
+            self.previous_steer = 0.0
+            self.velocity = 0.0
+            self.distance_from_center = 0.0
+            self.angle = 0.0
             self.center_lane_deviation = 0.0
             self.distance_covered = 0.0
 
-
             if self.fresh_start:
+                print("[RESET] Creating new route waypoints")
                 self.current_waypoint_index = 0
-                # Waypoint nearby angle and distance from it
-                self.route_waypoints = list()
+                self.route_waypoints = []
                 self.waypoint = self.map.get_waypoint(self.vehicle.get_location(), project_to_road=True, lane_type=(carla.LaneType.Driving))
                 current_waypoint = self.waypoint
                 self.route_waypoints.append(current_waypoint)
@@ -131,30 +154,46 @@ class CarlaEnvironment():
                     self.route_waypoints.append(next_waypoint)
                     current_waypoint = next_waypoint
             else:
-                # Teleport vehicle to last checkpoint
+                print("[RESET] Using existing route waypoints and teleporting to checkpoint")
                 waypoint = self.route_waypoints[self.checkpoint_waypoint_index % len(self.route_waypoints)]
                 transform = waypoint.transform
                 self.vehicle.set_transform(transform)
                 self.current_waypoint_index = self.checkpoint_waypoint_index
 
-            self.navigation_obs = np.array([self.throttle, self.velocity, self.previous_steer, self.distance_from_center, self.angle])
+            self.navigation_obs = np.array([
+                self.throttle,
+                self.velocity,
+                self.previous_steer,
+                self.distance_from_center,
+                self.angle
+            ])
 
-                        
+            print("[RESET] Reset done successfully")
             time.sleep(0.5)
             self.collision_history.clear()
-
             self.episode_start_time = time.time()
+
             return [self.image_obs, self.navigation_obs]
 
-        except:
-            self.client.apply_batch([carla.command.DestroyActor(x) for x in self.sensor_list])
-            self.client.apply_batch([carla.command.DestroyActor(x) for x in self.actor_list])
-            self.client.apply_batch([carla.command.DestroyActor(x) for x in self.walker_list])
+        except Exception as e:
+            print(f"[RESET ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+
+            self.remove_sensors()
+            try:
+                self.client.apply_batch([carla.command.DestroyActor(x) for x in self.sensor_list])
+                self.client.apply_batch([carla.command.DestroyActor(x) for x in self.actor_list])
+                self.client.apply_batch([carla.command.DestroyActor(x) for x in self.walker_list])
+            except Exception as destroy_err:
+                print(f"[RESET CLEANUP ERROR] Failed during batch destroy: {destroy_err}")
+
             self.sensor_list.clear()
             self.actor_list.clear()
-            self.remove_sensors()
             if self.display_on:
+                print("[RESET] Quitting pygame")
                 pygame.quit()
+
 
 
 # ----------------------------------------------------------------
@@ -164,7 +203,7 @@ class CarlaEnvironment():
     # A step function is used for taking inputs generated by neural net.
     def step(self, action_idx):
         try:
-
+            print("step is going")
             self.timesteps+=1
             self.fresh_start = False
 
@@ -285,6 +324,22 @@ class CarlaEnvironment():
                 time.sleep(0.0001)
 
             self.image_obs = self.camera_obj.front_camera.pop(-1)
+            
+            # ==========  이미지 저장 로직 ==============
+            if self.save_image:
+                from PIL import Image
+
+                # Ensure the directory exists
+                os.makedirs(self.image_save_dir, exist_ok=True)
+
+                if self.env_camera_obj is not None and len(self.env_camera_obj.front_camera) > 0:
+                    env_img = self.env_camera_obj.front_camera.pop(-1)
+                    env_img_pil = Image.fromarray(env_img)
+                    env_img_pil.save(os.path.join(self.image_save_dir, f"third_frame_{self.frame_count:05d}.png"))
+
+                self.frame_count += 1
+
+
             normalized_velocity = self.velocity/self.target_speed
             normalized_distance_from_center = self.distance_from_center / self.max_distance_from_center
             normalized_angle = abs(self.angle / np.deg2rad(20))
@@ -292,20 +347,33 @@ class CarlaEnvironment():
             
             # Remove everything that has been spawned in the env
             if done:
+                print("\n[STEP] Episode done. Cleaning up...")
+                print(f"[STEP] Sensor list: {[x.id for x in self.sensor_list]}")
+                print(f"[STEP] Actor list: {[x.id for x in self.actor_list]}")
                 self.center_lane_deviation = self.center_lane_deviation / self.timesteps
                 self.distance_covered = abs(self.current_waypoint_index - self.checkpoint_waypoint_index)
                 
                 for sensor in self.sensor_list:
-                    sensor.destroy()
+                    try:
+                        print(f"[STEP] Destroying sensor {sensor.id}")
+                        sensor.destroy()
+                    except Exception as e:
+                        print(f"[STEP ERROR] Failed to destroy sensor {sensor.id}: {e}")
                 
                 self.remove_sensors()
                 
                 for actor in self.actor_list:
-                    actor.destroy()
+                    try:
+                        print(f"[STEP] Destroying actor {actor.id}")
+                        actor.destroy()
+                    except Exception as e:
+                        print(f"[STEP ERROR] Failed to destroy actor {actor.id}: {e}")
             
             return [self.image_obs, self.navigation_obs], reward, done, [self.distance_covered, self.center_lane_deviation]
 
-        except:
+        except Exception as e:
+            print(f"[carla step error] {e}")
+            traceback.print_exc()
             self.client.apply_batch([carla.command.DestroyActor(x) for x in self.sensor_list])
             self.client.apply_batch([carla.command.DestroyActor(x) for x in self.actor_list])
             self.client.apply_batch([carla.command.DestroyActor(x) for x in self.walker_list])
@@ -475,11 +543,30 @@ class CarlaEnvironment():
 
     # Clean up method
     def remove_sensors(self):
-        self.camera_obj = None
-        self.collision_obj = None
-        self.lane_invasion_obj = None
-        self.env_camera_obj = None
-        self.front_camera = None
-        self.collision_history = None
-        self.wrong_maneuver = None
+        if self.camera_obj is not None and hasattr(self.camera_obj, 'sensor'):
+            try:
+                print(f"[CLEANUP] Trying to destroy sensor ")
+                self.camera_obj.sensor.stop()
+                self.camera_obj.sensor.destroy()
+                print(f"[CLEANUP] Destroyed sensor")
+            except Exception as e:
+                print(f"[CLEANUP ERROR] Failed to destroy sensor: {e}")
+                pass
+            self.camera_obj = None
+
+        if self.env_camera_obj is not None and hasattr(self.env_camera_obj, 'sensor'):
+            try:
+                self.env_camera_obj.sensor.stop()
+                self.env_camera_obj.sensor.destroy()
+            except:
+                pass
+            self.env_camera_obj = None
+
+        if self.collision_obj is not None and hasattr(self.collision_obj, 'sensor'):
+            try:
+                self.collision_obj.sensor.stop()
+                self.collision_obj.sensor.destroy()
+            except:
+                pass
+            self.collision_obj = None
 

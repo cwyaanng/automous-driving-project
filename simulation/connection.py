@@ -3,10 +3,7 @@ import sys
 import glob
 
 try:
-    sys.path.append(glob.glob('./carla/carla-*%d.%d-%s.egg' % (
-        sys.version_info.major,
-        sys.version_info.minor,
-        'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
+    sys.path.append(os.path.abspath("/home/jini70899/ad/auto/carla/carla-0.9.8-py3.5-linux-x86_64.egg"))
 except IndexError:
     print('Couldn\'t import Carla egg properly')
 
