@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument('--test-timesteps', type=int, default=TEST_TIMESTEPS, help='timesteps to test our model')
     parser.add_argument('--episode-length', type=int, default=EPISODE_LENGTH, help='max timesteps in an episode')
     parser.add_argument('--train', default=True, type=boolean_string, help='is it training?')
-    parser.add_argument('--town', type=str, default="Town07", help='which town do you like?')
+    parser.add_argument('--town', type=str, default="Town05", help='which town do you like?')
     parser.add_argument('--load-checkpoint', type=bool, default=MODEL_LOAD, help='resume training?')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True, help='if toggled, `torch.backends.cudnn.deterministic=False`')
     parser.add_argument('--cuda', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True, help='if toggled, cuda will not be enabled by deafult')
@@ -197,8 +197,10 @@ def runner():
                
                 try:
                     print(f"timestep : {timestep} , total_timestep : {total_timesteps}")
+                    # 환경 리셋 
                     observation = env.reset()
                     observation = encode.process(observation)
+                    
                     print("[DEBUG] TRAIN Environment reset successful")
                 except Exception as e:
                     print(f"[ERROR] env.reset() failed: {e}")
@@ -210,14 +212,17 @@ def runner():
 
                 for t in range(args.episode_length):
                 
-                    # select action with policy
+                    # 정책에 따라 행동 선택 
                     action = agent.get_action(observation, train=True)
 
+                    # agent 가 선택한 action을 환경에 적용 
+                    # 다음 상태, reward, done, info 리턴 
                     observation, reward, done, info = env.step(action)
                     if observation is None:
                         break
+                    # 다음 상태도 인코딩 
                     observation = encode.process(observation)
-                    
+                    # 해당 상태에서 얻은 경험을 agent memory에 저장 
                     agent.memory.rewards.append(reward)
                     agent.memory.dones.append(done)
                     
@@ -226,7 +231,8 @@ def runner():
                     
                     if timestep % action_std_decay_freq == 0:
                         action_std_init =  agent.decay_action_std(action_std_decay_rate, min_action_std)
-
+                    
+                    # 전체 학습 타임스탬프의 마지막 단계 => 체크포인트 저장 
                     if timestep == total_timesteps -1:
                         agent.chkpt_save()
 
@@ -247,9 +253,13 @@ def runner():
                         episodic_length.append(abs(t3.total_seconds()))
                         break
                 
+                # 중앙에서 벗어난 정도 
                 deviation_from_center += info[1]
+                
+                # 누적 거리 합하기 
                 distance_covered += info[0]
                 
+                # 에피소드에서 받은 총 보상을 기록 
                 scores.append(current_ep_reward)
                 
                 if checkpoint_load:
@@ -259,14 +269,24 @@ def runner():
 
 
                 print('Episode: {}'.format(episode),', Timestep: {}'.format(timestep),', Reward:  {:.2f}'.format(current_ep_reward),', Average Reward:  {:.2f}'.format(cumulative_score))
+                # 10 에피소드마다 학습 및 체크포인트 저장 
                 if episode % 10 == 0:
+                    # PPO 에이전트 학습 
                     agent.learn()
+                    # 모델 가중치 저장 
                     agent.chkpt_save()
+                    
+                    # 가장 최근의 체크포인트 파일 가져오기 
                     chkt_file_nums = len(next(os.walk(f'checkpoints/PPO/{town}'))[2])
                     if chkt_file_nums != 0:
                         chkt_file_nums -=1
+                    # 체크포인트 메타데이터 파일 경로 구성 및 체크포인트 정보 저장 
                     chkpt_file = f'checkpoints/PPO/{town}/checkpoint_ppo_'+str(chkt_file_nums)+'.pickle'
-                    data_obj = {'cumulative_score': cumulative_score, 'episode': episode, 'timestep': timestep, 'action_std_init': action_std_init}
+                    data_obj = {
+                        'cumulative_score': cumulative_score, 
+                        'episode': episode, 
+                        'timestep': timestep, 
+                        'action_std_init': action_std_init}
                     with open(chkpt_file, 'wb') as handle:
                         pickle.dump(data_obj, handle)
                     

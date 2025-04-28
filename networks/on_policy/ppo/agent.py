@@ -80,53 +80,72 @@ class PPOAgent(object):
 
 
     def learn(self):
-
-        # Monte Carlo estimate of returns
-        rewards = []
-        discounted_reward = 0
-        for reward, is_terminal in zip(reversed(self.memory.rewards), reversed(self.memory.dones)):
-            if is_terminal:
-                discounted_reward = 0
-            discounted_reward = reward + (self.gamma * discounted_reward)
-            rewards.insert(0, discounted_reward)
-            
-        # Normalizing the rewards
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
-
-        # convert list to tensor
-        old_states = torch.squeeze(torch.stack(self.memory.observation, dim=0)).detach().to(device)
-        old_actions = torch.squeeze(torch.stack(self.memory.actions, dim=0)).detach().to(device)
-        old_logprobs = torch.squeeze(torch.stack(self.memory.log_probs, dim=0)).detach().to(device)
-
+        print("========= PPO LEARN START =========")
         
-        # Optimize policy for K epochs
-        for _ in range(self.n_updates_per_iteration):
+        try:
+            # Monte Carlo estimate of returns
+            rewards = []
+            discounted_reward = 0
+            for reward, is_terminal in zip(reversed(self.memory.rewards), reversed(self.memory.dones)):
+                if is_terminal:
+                    discounted_reward = 0
+                discounted_reward = reward + (self.gamma * discounted_reward)
+                rewards.insert(0, discounted_reward)
 
-            # Evaluating old actions and values
-            logprobs, values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+            # Normalizing the rewards
+            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+            print(f"[DEBUG] Raw rewards tensor: {rewards}")
+            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+            print(f"[DEBUG] Normalized rewards: {rewards}")
 
-            # match values tensor dimensions with rewards tensor
-            values = torch.squeeze(values)
+            # Convert memory to tensors
+            old_states = torch.squeeze(torch.stack(self.memory.observation, dim=0)).detach().to(device)
+            old_actions = torch.squeeze(torch.stack(self.memory.actions, dim=0)).detach().to(device)
+            old_logprobs = torch.squeeze(torch.stack(self.memory.log_probs, dim=0)).detach().to(device)
+
+            print(f"[DEBUG] old_states shape: {old_states.shape}")
+            print(f"[DEBUG] old_actions shape: {old_actions.shape}")
+            print(f"[DEBUG] old_logprobs shape: {old_logprobs.shape}")
             
-            # Finding the ratio (pi_theta / pi_theta__old)
-            ratios = torch.exp(logprobs - old_logprobs.detach())
+            # Optimize policy for K epochs
+            for update_iter in range(self.n_updates_per_iteration):
+                print(f"[DEBUG] PPO update step {update_iter+1}/{self.n_updates_per_iteration}")
+                try:
+                    logprobs, values, dist_entropy = self.policy.evaluate(old_states, old_actions)
+                    print(f"[DEBUG] logprobs: {logprobs[:5]}")
+                    print(f"[DEBUG] values: {values[:5]}")
+                    print(f"[DEBUG] dist_entropy: {dist_entropy[:5]}")
+                except Exception as eval_e:
+                    print(f"[ERROR] During evaluation step: {eval_e}")
+                    raise
 
-            # Finding Surrogate Loss
-            advantages = rewards - values.detach()   
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1-self.clip, 1+self.clip) * advantages
+                values = torch.squeeze(values)
 
-            # final loss of clipped objective PPO
-            loss = -torch.min(surr1, surr2) + 0.5*self.MseLoss(values, rewards) - 0.01*dist_entropy
-            
-            # take gradient step
-            self.optimizer.zero_grad()
-            loss.mean().backward()
-            self.optimizer.step()
+                ratios = torch.exp(logprobs - old_logprobs.detach())
+                advantages = rewards - values.detach()
+                surr1 = ratios * advantages
+                surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages
 
-        self.old_policy.load_state_dict(self.policy.state_dict())
-        self.memory.clear()
+                loss = -torch.min(surr1, surr2) + 0.5 * self.MseLoss(values, rewards) - 0.01 * dist_entropy
+
+                try:
+                    self.optimizer.zero_grad()
+                    loss.mean().backward()
+                    self.optimizer.step()
+                except Exception as opt_e:
+                    print(f"[ERROR] During optimizer step: {opt_e}")
+                    raise
+
+            self.old_policy.load_state_dict(self.policy.state_dict())
+            self.memory.clear()
+            print("========= PPO LEARN SUCCESS =========\n")
+
+        except Exception as e:
+            print("========= PPO LEARN ERROR =========")
+            import traceback
+            traceback.print_exc()
+            print(f"[ERROR] Exception during PPO learn(): {e}")
+
 
     
     def save(self):

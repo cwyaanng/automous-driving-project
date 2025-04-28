@@ -6,13 +6,12 @@ import numpy as np
 from torch.distributions import MultivariateNormal
 
 
-
 class ActorCritic(nn.Module):
     def __init__(self, obs_dim, action_dim, action_std_init):
         super(ActorCritic, self).__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
-        self.device = torch.device("cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Create our variable for the matrix.
         # Note that I chose 0.2 for stdev arbitrarily.

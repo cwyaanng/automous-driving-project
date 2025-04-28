@@ -28,6 +28,7 @@ class ClientConnection:
         except Exception as e:
             print(
                 'Failed to make a connection with the server: {}'.format(e))
+            print(self.client.get_available_maps())
             self.error()
 
     # An error method: prints out the details if the client failed to make a connection
@@ -38,6 +39,6 @@ class ClientConnection:
         print("Server version: {}\n".format(
             self.client.get_server_version()))
 
-        if self.client.get_client_version != self.client.get_server_version:
+        if self.client.get_client_version() != self.client.get_server_version():
             print(
                 "There is a Client and Server version mismatch! Please install or download the right versions.")
