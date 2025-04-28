@@ -45,7 +45,6 @@ def boolean_string(s):
 
 def make_video_from_frames(folder_path, output_file='output.mp4', fps=20, prefix="third_frame"):
 
-    print(f"[DEBUG] Creating video from folder: {folder_path}, using prefix: {prefix}")
     images = sorted([img for img in os.listdir(folder_path) if img.startswith(prefix) and img.endswith(".png")])
 
     if not images:
@@ -196,12 +195,9 @@ def runner():
             while timestep < total_timesteps:
                
                 try:
-                    print(f"timestep : {timestep} , total_timestep : {total_timesteps}")
                     # 환경 리셋 
                     observation = env.reset()
                     observation = encode.process(observation)
-                    
-                    print("[DEBUG] TRAIN Environment reset successful")
                 except Exception as e:
                     print(f"[ERROR] env.reset() failed: {e}")
                     traceback.print_exc()
@@ -238,13 +234,13 @@ def runner():
 
                     # break; if the episode is over
                     if done:
+                        episode += 1  
                         os.makedirs(env.image_save_dir, exist_ok=True)
                         # make_video_from_frames(
                         #     folder_path=os.path.join("video_frames", town, f"train_episode_{episode:04d}"),
                         #     output_file=os.path.join("video_frames", town, f"train_episode_{episode:04d}.mp4"),
                         #     prefix="third_frame"
-                        # )
-                        episode += 1           
+                        # )         
                         
                         env.frame_count = 0
                         t2 = datetime.now()
@@ -357,6 +353,7 @@ def runner():
                     # break; if the episode is over
                     if done:
                         print(f"[DEBUG] Episode {episode} ended11. Setting up next image_save_dir.")
+                        episode += 1
 
                         try:
                             print(f"[DEBUG] Calling make_video_from_frames()")
@@ -372,7 +369,6 @@ def runner():
                             print(f"[ERROR] make_video_from_frames failed: {e}")
                             traceback.print_exc()
 
-                        episode += 1
                         print(f"[DEBUG] New image_save_dir: {env.image_save_dir}")
                         print(f"[DEBUG] Making video from: video_frames/{town}/train_episode_{episode:04d}")
                         t2 = datetime.now()

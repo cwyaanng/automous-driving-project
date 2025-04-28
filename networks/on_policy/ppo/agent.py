@@ -7,7 +7,6 @@ from encoder_init import EncodeState
 from networks.on_policy.ppo.ppo import ActorCritic
 from parameters import  *
 
-device = torch.device("cpu")
 
 class Buffer:
     def __init__(self):
@@ -29,6 +28,7 @@ class PPOAgent(object):
     def __init__(self, town, action_std_init=0.4):
         
         #self.env = env
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.obs_dim = 100
         self.action_dim = 2
         self.clip = POLICY_CLIP
@@ -39,15 +39,16 @@ class PPOAgent(object):
         self.encode = EncodeState(LATENT_DIM)
         self.memory = Buffer()
         self.town = town
+        
 
         self.checkpoint_file_no = 0
         
-        self.policy = ActorCritic(self.obs_dim, self.action_dim, self.action_std)
+        self.policy = ActorCritic(self.obs_dim, self.action_dim, self.action_std).to(self.device)
         self.optimizer = torch.optim.Adam([
                         {'params': self.policy.actor.parameters(), 'lr': self.lr},
                         {'params': self.policy.critic.parameters(), 'lr': self.lr}])
 
-        self.old_policy = ActorCritic(self.obs_dim, self.action_dim, self.action_std)
+        self.old_policy = ActorCritic(self.obs_dim, self.action_dim, self.action_std).to(self.device)
         self.old_policy.load_state_dict(self.policy.state_dict())
         self.MseLoss = nn.MSELoss()
 
@@ -56,10 +57,10 @@ class PPOAgent(object):
 
         with torch.no_grad():
             if isinstance(obs, np.ndarray):
-                obs = torch.tensor(obs, dtype=torch.float)
-            action, logprob = self.old_policy.get_action_and_log_prob(obs.to(device))
+                obs = torch.tensor(obs, dtype=torch.float).to(self.device)
+            action, logprob = self.old_policy.get_action_and_log_prob(obs)
         if train:
-            self.memory.observation.append(obs.to(device))
+            self.memory.observation.append(obs)
             self.memory.actions.append(action)
             self.memory.log_probs.append(logprob)
 
@@ -93,15 +94,15 @@ class PPOAgent(object):
                 rewards.insert(0, discounted_reward)
 
             # Normalizing the rewards
-            rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+            rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
             print(f"[DEBUG] Raw rewards tensor: {rewards}")
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
             print(f"[DEBUG] Normalized rewards: {rewards}")
 
             # Convert memory to tensors
-            old_states = torch.squeeze(torch.stack(self.memory.observation, dim=0)).detach().to(device)
-            old_actions = torch.squeeze(torch.stack(self.memory.actions, dim=0)).detach().to(device)
-            old_logprobs = torch.squeeze(torch.stack(self.memory.log_probs, dim=0)).detach().to(device)
+            old_states = torch.squeeze(torch.stack(self.memory.observation, dim=0)).detach().to(self.device)
+            old_actions = torch.squeeze(torch.stack(self.memory.actions, dim=0)).detach().to(self.device)
+            old_logprobs = torch.squeeze(torch.stack(self.memory.log_probs, dim=0)).detach().to(self.device)
 
             print(f"[DEBUG] old_states shape: {old_states.shape}")
             print(f"[DEBUG] old_actions shape: {old_actions.shape}")

@@ -13,7 +13,7 @@ from simulation.settings import RGB_CAMERA, SSC_CAMERA
 class CameraSensor():
 
     def __init__(self, vehicle):
-        self.sensor_name = SSC_CAMERA
+        self.sensor_name = RGB_CAMERA
         self.parent = vehicle
         self.front_camera = list()
         world = self.parent.get_world()
@@ -41,7 +41,7 @@ class CameraSensor():
         placeholder = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         placeholder1 = placeholder.reshape((image.width, image.height, 4))
         target = placeholder1[:, :, :3]
-        self.front_camera.append(target)#/255.0)
+        self.front_camera.append(target/255.0)
 
 
 # ---------------------------------------------------------------------|
@@ -52,31 +52,41 @@ class CameraSensorEnv:
     def __init__(self, vehicle):
         self.sensor_name = 'sensor.camera.rgb'
         self.parent = vehicle
-        self.front_camera = []  # 이미지를 저장할 리스트
+        self.front_camera = []  # 앞 카메라 센서 이미지 저장 
+        self.rear_camera = [] # 뒤 카메라 센서 이미지 저장 
 
         world = self.parent.get_world()
-        self.sensor = self._set_camera_sensor(world)
+        self.front_sensor = self._set_camera_sensor(world, position='front')
+        self.rear_sensor = self._set_camera_sensor(world, position='rear')
         weak_self = weakref.ref(self)
-        self.sensor.listen(lambda image: CameraSensorEnv._get_third_person_camera(weak_self, image))
+        self.front_sensor.listen(lambda image: CameraSensorEnv._save_image(weak_self, image, 'front'))
+        self.rear_sensor.listen(lambda image: CameraSensorEnv._save_image(weak_self, image, 'rear'))
 
-    def _set_camera_sensor(self, world):
+    def _set_camera_sensor(self, world,position='front'):
         blueprint = world.get_blueprint_library().find(self.sensor_name)
         blueprint.set_attribute('image_size_x', '1280')
         blueprint.set_attribute('image_size_y', '720')
         blueprint.set_attribute('fov', '90')
         blueprint.set_attribute('sensor_tick', '0.05')
 
-        # 3인칭 시점 설정: 차량 뒤쪽 위에서 바라보는 시점
-        transform = carla.Transform(
-            carla.Location(x=-6.0, z=2.5),  # 뒤로 6m, 위로 2.5m
-            carla.Rotation(pitch=-15.0)    # 약간 아래로 향함
-        )
+        if position == 'front':
+            transform = carla.Transform(
+            carla.Location(x=6.0, z=4.0),       # 차량 앞쪽 위치
+            carla.Rotation(pitch=-15.0, yaw=180.0)  # 뒤로 돌려서 차량 바라봄
+            )
+        elif position == 'rear':
+            transform = carla.Transform(
+                carla.Location(x=-6.0, z=4.0),      # 차량 뒤쪽 위치
+                carla.Rotation(pitch=-15.0, yaw=0.0)    # 그대로 차량 바라봄
+            )
+
 
         sensor = world.spawn_actor(blueprint, transform, attach_to=self.parent)
         return sensor
 
+
     @staticmethod
-    def _get_third_person_camera(weak_self, image):
+    def _save_image(weak_self, image, position):
         self = weak_self()
         if not self:
             return
@@ -84,7 +94,11 @@ class CameraSensorEnv:
         array = np.frombuffer(image.raw_data, dtype=np.uint8)
         array = array.reshape((image.height, image.width, 4))
         rgb_array = array[:, :, :3]  # RGB만 추출
-        self.front_camera.append(rgb_array)
+
+        if position == 'front':
+            self.front_camera.append(rgb_array)
+        elif position == 'rear':
+            self.rear_camera.append(rgb_array)
 
 
 

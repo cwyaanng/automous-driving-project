@@ -15,10 +15,10 @@ class ActorCritic(nn.Module):
         
         # Create our variable for the matrix.
         # Note that I chose 0.2 for stdev arbitrarily.
-        self.cov_var = torch.full((self.action_dim,), action_std_init)
+        self.cov_var = torch.full((self.action_dim,), action_std_init).to(self.device)
 
         # Create the covariance matrix
-        self.cov_mat = torch.diag(self.cov_var).unsqueeze(dim=0)
+        self.cov_mat = torch.diag(self.cov_var).unsqueeze(dim=0).to(self.device)
 
         # actor
         self.actor = nn.Sequential(
@@ -30,7 +30,7 @@ class ActorCritic(nn.Module):
                         nn.Tanh(),
                         nn.Linear(100, self.action_dim),
                         nn.Tanh()
-                    )
+                    ).to(self.device)
         
         # critic
         self.critic = nn.Sequential(
@@ -41,7 +41,7 @@ class ActorCritic(nn.Module):
                         nn.Linear(300, 100),
                         nn.Tanh(),
                         nn.Linear(100, 1)
-                    )
+                    ).to(self.device)
 
     def forward(self):
         raise NotImplementedError
